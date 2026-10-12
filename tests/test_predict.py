@@ -25,7 +25,7 @@ def model():
 
 @pytest.mark.parametrize("p,expected", [
     (0.0, "low"), (0.29, "low"), (0.30, "moderate"), (0.59, "moderate"),
-    (0.60, "low"), (1.0, "high"),
+    (0.60, "high"), (1.0, "high"),
 ])
 def test_risk_bands(p, expected):
     assert risk_level(p) == expected
