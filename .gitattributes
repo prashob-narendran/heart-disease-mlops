@@ -1,0 +1,14 @@
+# Default: let Git normalise line endings for source files.
+* text=auto
+
+# Data must stay byte-for-byte identical on every OS, otherwise the SHA-256
+# checksum in data/raw/manifest.json would not match after a Windows clone.
+data/** -text
+*.joblib binary
+*.png binary
+
+# Shell scripts run inside Linux (CI runners, Docker) need LF endings.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

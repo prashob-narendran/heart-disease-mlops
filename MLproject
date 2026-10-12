@@ -1,0 +1,19 @@
+# MLflow Project definition: lets the whole pipeline be run reproducibly with
+#   mlflow run . --env-manager local            (full pipeline)
+#   mlflow run . -e quick --env-manager local   (smoke run)
+# With the default env manager, MLflow builds a fresh virtualenv from
+# python_env.yaml (requires pyenv/virtualenv); --env-manager local reuses
+# the active venv.
+name: heart-disease-mlops
+
+python_env: python_env.yaml
+
+entry_points:
+  main:
+    command: "python scripts/download_data.py && python -m src.data_processing && python -m src.train && python scripts/check_model.py"
+  quick:
+    command: "python scripts/download_data.py && python -m src.data_processing && python -m src.train --quick"
+  predict:
+    parameters:
+      input: {type: path, default: samples/sample_patient.json}
+    command: "python -m src.predict --input {input}"

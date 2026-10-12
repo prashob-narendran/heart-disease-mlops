@@ -118,6 +118,17 @@ def main() -> int:
         log.info("Raw data already present: %s (use --force to refresh)",
                  RAW_FILE)
         validate_raw(RAW_FILE)
+        # Integrity check: the file must match the checksum recorded when it
+        # was downloaded. Catches silent edits or a corrupted copy, which
+        # would otherwise produce different models from "the same" data.
+        if RAW_MANIFEST.exists():
+            expected = json.loads(RAW_MANIFEST.read_text()).get("sha256")
+            actual = sha256(RAW_FILE)
+            if expected and actual != expected:
+                log.error("Checksum mismatch!\n  manifest: %s\n  file:     %s"
+                          "\nRe-download with --force.", expected, actual)
+                return 2
+            log.info("Checksum OK (sha256=%s...)", actual[:12])
         return 0
 
     if args.from_file:

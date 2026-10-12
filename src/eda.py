@@ -7,15 +7,25 @@ Used by notebooks/01_eda.ipynb and by `python -m src.eda`.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
-from matplotlib.colors import LinearSegmentedColormap
+import matplotlib
 
-from src.config import (
+# Scripts, tests, CI and the API only SAVE figures, so use the file-only
+# "Agg" backend. Without this, Windows defaults to Tk (an on-screen window
+# toolkit) and fails if Tcl/Tk is not fully installed. Inside Jupyter
+# (ipykernel loaded) the notebook's inline backend is left untouched.
+if "ipykernel" not in sys.modules:
+    matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import seaborn as sns  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
+
+from src.config import (  # noqa: E402
     CATEGORICAL_FEATURES,
     CATEGORY_LABELS,
     FEATURE_DESCRIPTIONS,

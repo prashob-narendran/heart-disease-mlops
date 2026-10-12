@@ -17,6 +17,10 @@ RAW_FILE = RAW_DIR / "processed.cleveland.data"
 RAW_MANIFEST = RAW_DIR / "manifest.json"
 CLEAN_FILE = PROCESSED_DIR / "heart_clean.csv"
 
+MODEL_DIR = PROJECT_ROOT / "models"
+MODEL_FILE = MODEL_DIR / "model.joblib"
+METADATA_FILE = MODEL_DIR / "metadata.json"
+
 # ---------------------------------------------------------------- source
 # Official UCI Machine Learning Repository, Heart Disease (id 45),
 # Cleveland Clinic Foundation subset - the 303-patient file used in

@@ -1,0 +1,168 @@
+# CI pipeline for the heart-disease MLOps project.
+#
+#   lint ──► test ──► train
+#
+# * lint  : flake8 on all Python code (fails fast, ~20 s)
+# * test  : 42 unit + integration tests with coverage; JUnit + coverage
+#           reports uploaded as artifacts
+# * train : verifies the dataset checksum, cleans the data, trains and
+#           tracks all models with MLflow, enforces a model quality gate,
+#           scores a sample patient, uploads model + reports + mlruns
+#
+# Any failing step fails the job, and later jobs do not run.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "screenshots/**"
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.docx"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  MPLBACKEND: Agg
+
+jobs:
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install flake8
+        run: pip install flake8==7.1.1
+
+      - name: Run flake8
+        run: flake8 src scripts tests --count --show-source --statistics
+
+  test:
+    name: Unit & integration tests
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest with coverage
+        run: |
+          mkdir -p test-reports
+          pytest -v \
+            --junitxml=test-reports/junit.xml \
+            --cov=src --cov-report=term \
+            --cov-report=xml:test-reports/coverage.xml \
+            --cov-report=html:test-reports/coverage-html
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: test-reports/
+          retention-days: 30
+
+  train:
+    name: Train, track & validate model
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify dataset (checksum against manifest)
+        run: python scripts/download_data.py
+
+      - name: Clean data
+        run: python -m src.data_processing
+
+      - name: Train models and log to MLflow
+        run: python -m src.train
+
+      - name: Model quality gate
+        run: python scripts/check_model.py
+
+      - name: Smoke-test inference on sample patients
+        run: python -m src.predict --input samples/sample_batch.json
+
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          import pandas as pd
+          meta_path = pathlib.Path("models/metadata.json")
+          cmp_path = pathlib.Path("reports/model_comparison.csv")
+          if not meta_path.exists() or not cmp_path.exists():
+              print("### Training did not produce a model")
+              raise SystemExit
+          meta = json.loads(meta_path.read_text())
+          t = pd.read_csv(cmp_path, index_col=0)
+          cols = ["cv_roc_auc_mean", "cv_roc_auc_std", "cv_recall_mean",
+                  "test_roc_auc", "test_recall", "test_accuracy", "selected"]
+          print(f"### Selected model: **{meta['model_label']}**\n")
+          print(f"Dataset sha256 `{meta['dataset_sha256']}` · "
+                f"commit `{meta['git_commit']}`\n")
+          t = t[cols].round(3)
+          print("| model | " + " | ".join(cols) + " |")
+          print("|---" * (len(cols) + 1) + "|")
+          for name, row in t.iterrows():
+              print(f"| {name} | " + " | ".join(str(v) for v in row) + " |")
+          EOF
+
+      - name: Upload model
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: |
+            models/model.joblib
+            models/metadata.json
+          retention-days: 30
+
+      - name: Upload reports and MLflow runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-reports
+          path: |
+            reports/model_comparison.csv
+            reports/figures/1*.png
+            mlruns/
+          retention-days: 30

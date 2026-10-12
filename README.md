@@ -1,5 +1,7 @@
 # Heart Disease Risk Prediction: End-to-End MLOps
 
+[![CI](https://github.com/prashob-narendran/heart-disease-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/prashob-narendran/heart-disease-mlops/actions/workflows/ci.yml)
+
 Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Disease, Cleveland subset) and is being built out as a reproducible, tested, containerised and monitored ML service.
 
 | Stage | Status |
@@ -7,9 +9,9 @@ Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Di
 | 1. Data acquisition & EDA | ✅ done |
 | 2. Feature engineering & models | ✅ done |
 | 3. MLflow experiment tracking | ✅ done |
-| 4. Packaging & reproducibility | ⏳ next (partly done: pipeline saved as one object, pinned deps, seeds) |
-| 5. CI/CD (GitHub Actions) | ⏳ |
-| 6. Docker + FastAPI | ⏳ |
+| 4. Packaging & reproducibility | ✅ done |
+| 5. CI/CD (GitHub Actions) | ✅ done |
+| 6. Docker + FastAPI | ⏳ next |
 | 7. Kubernetes deployment | ⏳ |
 | 8. Monitoring & logging | ⏳ |
 
@@ -33,10 +35,15 @@ python scripts/download_data.py    # -> data/raw/ + manifest.json (sha256)
 python -m src.data_processing      # -> data/processed/heart_clean.csv
 python -m src.eda                  # -> reports/figures/*.png
 python -m src.train                # tune 4 models, log to MLflow, save models/model.joblib
-pytest                             # data + model tests
+python scripts/check_model.py      # model quality gate
+python -m src.predict --input samples/sample_patient.json
+pytest                             # 42 unit + integration tests
 flake8 src scripts tests           # lint
 mlflow ui --backend-store-uri mlruns   # open http://127.0.0.1:5000
 ```
+
+Or run everything in one go: `.\scripts\reproduce.ps1` (Windows) / `bash scripts/reproduce.sh` (Linux/macOS),
+or as an MLflow Project: `mlflow run . --env-manager local`.
 
 If the UCI site is unreachable, the download script falls back to the official `ucimlrepo` client. As a last resort, download the file manually and run
 `python scripts/download_data.py --from-file path/to/processed.cleveland.data`.
@@ -49,7 +56,13 @@ If the UCI site is unreachable, the download script falls back to the official `
 │   └── processed/           heart_clean.csv
 ├── notebooks/01_eda.ipynb   EDA with findings and modelling implications
 ├── reports/figures/         EDA plots (used in the report)
-├── scripts/download_data.py dataset download + checksum
+├── .github/workflows/ci.yml GitHub Actions: lint -> test -> train
+├── samples/                 example patient JSON for inference
+├── scripts/
+│   ├── download_data.py     dataset download + checksum verification
+│   ├── check_model.py       model quality gate (fails below thresholds)
+│   └── reproduce.ps1/.sh    whole pipeline in one command
+├── MLproject, python_env.yaml  MLflow Project definition
 ├── src/
 │   ├── config.py            paths, schema, category labels
 │   ├── data_processing.py   load / clean / save
@@ -57,11 +70,14 @@ If the UCI site is unreachable, the download script falls back to the official `
 │   ├── features.py          preprocessing pipeline (impute, scale, one-hot)
 │   ├── models.py            4 candidate models + hyperparameter grids
 │   ├── evaluate.py          metrics, confusion matrix, ROC, permutation importance
-│   └── train.py             GridSearchCV + MLflow tracking + model registry
+│   ├── train.py             GridSearchCV + MLflow tracking + model registry
+│   └── predict.py           inference (shared by CLI and API)
 ├── models/                  model.joblib + metadata.json (selected model)
 ├── reports/model_comparison.csv
 ├── tests/test_data.py       data cleaning tests (no network needed)
 ├── tests/test_model.py      pipeline/model tests on synthetic data
+├── tests/test_predict.py    inference tests
+├── tests/test_integration.py end-to-end: train.py + MLflow + EDA on synthetic data
 ├── requirements.txt         pinned dependencies
 └── setup.cfg                flake8 + pytest config
 ```
@@ -94,3 +110,33 @@ Each `python -m src.train` creates one parent run (session) in the MLflow experi
 | Tags | dataset sha256, git commit, Python and sklearn versions |
 
 The selected model is registered as **`heart-disease-classifier`** with alias **`champion`**. `python -m src.train --quick` (used by CI) logs to a separate `-ci` experiment and never touches the registry.
+
+## Packaging & reproducibility (Stage 4)
+
+| Requirement | How it is met |
+|---|---|
+| Model saved with preprocessing | One sklearn `Pipeline` (impute, scale, one-hot, model) saved as `models/model.joblib` and logged to MLflow with signature + input example |
+| Model metadata | `models/metadata.json`: params, metrics, features, threshold, dataset sha256, git commit, library versions |
+| Pinned environment | `requirements.txt` (exact versions), `.python-version` = 3.11, `python_env.yaml` |
+| Deterministic results | seed 42 for split, CV folds and every model; identical results across runs |
+| Data integrity | SHA-256 in `data/raw/manifest.json`, verified on every run; `.gitattributes` keeps data bytes identical on Windows |
+| Registry | `heart-disease-classifier@champion` in the MLflow Model Registry |
+| One-command reproduction | `scripts/reproduce.ps1` / `.sh`, or `mlflow run .` |
+| Inference | `python -m src.predict --input <json>` (from file or `--source registry`) |
+
+Example response:
+
+```json
+{"prediction": 1, "label": "disease", "disease_probability": 0.84,
+ "confidence": 0.84, "risk_level": "high"}
+```
+
+## CI/CD (Stage 5)
+
+`.github/workflows/ci.yml` runs on every push and pull request to `main`:
+
+1. **Lint:** flake8 (fails on any style error)
+2. **Test:** 42 tests with coverage; JUnit XML + coverage reports uploaded
+3. **Train:** verify dataset checksum → clean → train and track with MLflow → **quality gate** (CV ROC-AUC ≥ 0.85, CV recall ≥ 0.70, test ROC-AUC ≥ 0.80) → sample inference; model, reports and `mlruns/` uploaded as artifacts; results table written to the job summary
+
+Each job only runs if the previous one passed, so a lint or test failure stops the pipeline.

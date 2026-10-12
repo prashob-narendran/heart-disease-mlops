@@ -51,6 +51,9 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_sp
 from src.config import (
     CLEAN_FILE,
     FEATURES,
+    METADATA_FILE,
+    MODEL_DIR,
+    MODEL_FILE,
     PROJECT_ROOT,
     RANDOM_SEED,
     RAW_MANIFEST,
@@ -74,7 +77,6 @@ log = logging.getLogger("train")
 
 EXPERIMENT_NAME = "heart-disease-classification"
 REGISTERED_MODEL = "heart-disease-classifier"
-MODEL_DIR = PROJECT_ROOT / "models"
 REPORT_DIR = PROJECT_ROOT / "reports"
 FIG_DIR = REPORT_DIR / "figures"
 TEST_SIZE = 0.2
@@ -246,7 +248,13 @@ def main(argv=None) -> dict:
              y_test.mean() * 100)
 
     mlflow.set_tracking_uri(tracking_uri())
-    mlflow.set_experiment(args.experiment)
+    if "MLFLOW_RUN_ID" in os.environ:
+        # Launched via `mlflow run .` (MLproject): MLflow already created the
+        # run and chose the experiment, so attach to it as the parent run.
+        log.info("Running inside MLflow Project run %s",
+                 os.environ["MLFLOW_RUN_ID"])
+    else:
+        mlflow.set_experiment(args.experiment)
     log.info("MLflow tracking URI: %s", mlflow.get_tracking_uri())
 
     results = {}
@@ -322,7 +330,7 @@ def main(argv=None) -> dict:
             best["run_id"], best_name)
 
         MODEL_DIR.mkdir(exist_ok=True)
-        joblib.dump(best["model"], MODEL_DIR / "model.joblib")
+        joblib.dump(best["model"], MODEL_FILE)
         metadata = {
             "model_name": best_name,
             "model_label": MODEL_LABELS[best_name],
@@ -345,9 +353,8 @@ def main(argv=None) -> dict:
             "python_version": platform.python_version(),
             "quick_mode": args.quick,
         }
-        (MODEL_DIR / "metadata.json").write_text(
-            json.dumps(metadata, indent=2))
-        mlflow.log_artifact(str(MODEL_DIR / "metadata.json"),
+        METADATA_FILE.write_text(json.dumps(metadata, indent=2))
+        mlflow.log_artifact(str(METADATA_FILE),
                             artifact_path="comparison")
 
     pd.set_option("display.width", 160)
@@ -356,7 +363,7 @@ def main(argv=None) -> dict:
                   "test_accuracy", "selected"]]
     log.info("Model comparison:\n%s", show.round(3).to_string())
     log.info("Selected: %s (registered version %s)", best_name, version)
-    log.info("Saved %s", MODEL_DIR / "model.joblib")
+    log.info("Saved %s", MODEL_FILE)
     return metadata
 
 
