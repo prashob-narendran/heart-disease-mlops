@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import os
 from functools import lru_cache
 from pathlib import Path
 
