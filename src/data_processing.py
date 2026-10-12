@@ -116,7 +116,9 @@ def load_clean(path: Path | str = CLEAN_FILE) -> pd.DataFrame:
 def save_clean(df: pd.DataFrame, path: Path | str = CLEAN_FILE) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    # Fixed "\n" line endings so the file is byte-identical on Windows and
+    # Linux (pandas would otherwise use "\r\n" on Windows).
+    df.to_csv(path, index=False, lineterminator="\n")
     return path
 
 

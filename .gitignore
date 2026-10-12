@@ -14,3 +14,7 @@ mlartifacts/
 htmlcov/
 test-reports/
 coverage.xml
+
+# quick (CI smoke) training outputs
+models/quick/
+reports/quick/

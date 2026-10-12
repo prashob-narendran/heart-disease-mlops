@@ -22,8 +22,10 @@ What one run of this script does
 Usage
 -----
     python -m src.train                  # full search (~1-2 min on a laptop)
-    python -m src.train --quick          # tiny grid, used in CI (separate
-                                         # experiment, no registry update)
+    python -m src.train --quick          # tiny grid smoke run: separate
+                                         # experiment, no registry update,
+                                         # outputs to models/quick/ and
+                                         # reports/quick/ (never the champion)
     mlflow ui --backend-store-uri mlruns # then open http://127.0.0.1:5000
 """
 
@@ -106,6 +108,24 @@ def tracking_uri() -> str:
     # e.g. http://localhost:5000 when an MLflow server is running.
     return os.environ.get("MLFLOW_TRACKING_URI",
                           (PROJECT_ROOT / "mlruns").as_uri())
+
+
+def output_paths(quick: bool) -> dict:
+    """Where this run writes its model and reports.
+
+    Quick (CI smoke) runs write to `models/quick/` and `reports/quick/`
+    (git-ignored) so they can never overwrite the real, tuned champion in
+    `models/` or the committed comparison table and figures.
+    """
+    model_dir = MODEL_DIR / "quick" if quick else MODEL_DIR
+    report_dir = REPORT_DIR / "quick" if quick else REPORT_DIR
+    return {
+        "model_dir": model_dir,
+        "model_file": model_dir / MODEL_FILE.name,
+        "metadata_file": model_dir / METADATA_FILE.name,
+        "report_dir": report_dir,
+        "fig_dir": report_dir / "figures",
+    }
 
 
 def select_best(table: pd.DataFrame) -> str:
@@ -257,6 +277,7 @@ def main(argv=None) -> dict:
         mlflow.set_experiment(args.experiment)
     log.info("MLflow tracking URI: %s", mlflow.get_tracking_uri())
 
+    out = output_paths(args.quick)
     results = {}
     session = datetime.now().strftime("session-%Y%m%d-%H%M%S")
     with mlflow.start_run(run_name=session) as parent, \
@@ -289,7 +310,7 @@ def main(argv=None) -> dict:
         best = results[best_name]
         table["selected"] = table.index == best_name
 
-        REPORT_DIR.mkdir(exist_ok=True)
+        out["fig_dir"].mkdir(parents=True, exist_ok=True)
         cols = ([f"cv_{m}_mean" for m in SCORING]
                 + [f"cv_{m}_std" for m in SCORING]
                 + [f"test_{m}" for m in SCORING]
@@ -297,24 +318,24 @@ def main(argv=None) -> dict:
                    "test_false_positives", "cv_train_roc_auc_mean",
                    "fit_seconds", "selected"])
         table = table[cols]
-        table.to_csv(REPORT_DIR / "model_comparison.csv",
+        table.to_csv(out["report_dir"] / "model_comparison.csv",
                      float_format="%.4f")
-        cmp_png = plot_model_comparison(table, FIG_DIR /
+        cmp_png = plot_model_comparison(table, out["fig_dir"] /
                                         "10_model_comparison_cv.png")
         roc_png = plot_roc_curves(
             {k: (y_test, v["y_proba"]) for k, v in results.items()},
-            FIG_DIR / "11_roc_curves_test.png",
+            out["fig_dir"] / "11_roc_curves_test.png",
             title="ROC curves - all models, test set")
         cm_png = plot_confusion_matrix(
             y_test, best["model"].predict(X_test),
             f"{MODEL_LABELS[best_name]} (selected) - test set",
-            FIG_DIR / "12_confusion_matrix_selected.png")
+            out["fig_dir"] / "12_confusion_matrix_selected.png")
         imp_png = plot_importance(
             best["importance"],
             f"{MODEL_LABELS[best_name]} (selected) - permutation importance",
-            FIG_DIR / "13_feature_importance_selected.png")
+            out["fig_dir"] / "13_feature_importance_selected.png")
 
-        for p in [REPORT_DIR / "model_comparison.csv", cmp_png, roc_png,
+        for p in [out["report_dir"] / "model_comparison.csv", cmp_png, roc_png,
                   cm_png, imp_png]:
             mlflow.log_artifact(str(p), artifact_path="comparison")
         mlflow.set_tag("selected_model", best_name)
@@ -329,8 +350,8 @@ def main(argv=None) -> dict:
         version = None if args.no_register else register_champion(
             best["run_id"], best_name)
 
-        MODEL_DIR.mkdir(exist_ok=True)
-        joblib.dump(best["model"], MODEL_FILE)
+        out["model_dir"].mkdir(parents=True, exist_ok=True)
+        joblib.dump(best["model"], out["model_file"])
         metadata = {
             "model_name": best_name,
             "model_label": MODEL_LABELS[best_name],
@@ -353,8 +374,8 @@ def main(argv=None) -> dict:
             "python_version": platform.python_version(),
             "quick_mode": args.quick,
         }
-        METADATA_FILE.write_text(json.dumps(metadata, indent=2))
-        mlflow.log_artifact(str(METADATA_FILE),
+        out["metadata_file"].write_text(json.dumps(metadata, indent=2))
+        mlflow.log_artifact(str(out["metadata_file"]),
                             artifact_path="comparison")
 
     pd.set_option("display.width", 160)
@@ -363,7 +384,7 @@ def main(argv=None) -> dict:
                   "test_accuracy", "selected"]]
     log.info("Model comparison:\n%s", show.round(3).to_string())
     log.info("Selected: %s (registered version %s)", best_name, version)
-    log.info("Saved %s", MODEL_FILE)
+    log.info("Saved %s", out["model_file"])
     return metadata
 
 

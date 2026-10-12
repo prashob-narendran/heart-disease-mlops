@@ -47,18 +47,21 @@ def trained(workspace):
 
 def test_training_writes_all_outputs(trained):
     root, meta = trained
-    assert (root / "models" / "model.joblib").exists()
-    saved = json.loads((root / "models" / "metadata.json").read_text())
+    # quick runs must write to the quick/ sub-folders only
+    assert not (root / "models" / "model.joblib").exists()
+    assert (root / "models" / "quick" / "model.joblib").exists()
+    saved = json.loads((root / "models" / "quick" / "metadata.json")
+                       .read_text())
     assert saved["model_name"] == meta["model_name"]
     assert saved["quick_mode"] is True
     assert saved["registered_version"] is None   # quick never registers
-    table = pd.read_csv(root / "reports" / "model_comparison.csv",
+    table = pd.read_csv(root / "reports" / "quick" / "model_comparison.csv",
                         index_col=0)
     assert len(table) == 4 and table["selected"].sum() == 1
     for f in ["10_model_comparison_cv.png", "11_roc_curves_test.png",
               "12_confusion_matrix_selected.png",
               "13_feature_importance_selected.png"]:
-        assert (root / "reports" / "figures" / f).exists()
+        assert (root / "reports" / "quick" / "figures" / f).exists()
 
 
 def test_training_logs_to_mlflow(trained):
@@ -78,7 +81,7 @@ def test_training_logs_to_mlflow(trained):
 
 def test_saved_model_serves_predictions(trained):
     root, _ = trained
-    model = joblib.load(root / "models" / "model.joblib")
+    model = joblib.load(root / "models" / "quick" / "model.joblib")
     X, _ = make_data(n=5, seed=2)
     out = predict_records(model, X.to_dict(orient="records"), threshold=0.5)
     assert len(out) == 5
