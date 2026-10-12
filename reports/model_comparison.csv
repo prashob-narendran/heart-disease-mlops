@@ -1,0 +1,5 @@
+,cv_accuracy_mean,cv_precision_mean,cv_recall_mean,cv_f1_mean,cv_roc_auc_mean,cv_accuracy_std,cv_precision_std,cv_recall_std,cv_f1_std,cv_roc_auc_std,test_accuracy,test_precision,test_recall,test_f1,test_roc_auc,test_specificity,test_false_negatives,test_false_positives,cv_train_roc_auc_mean,fit_seconds,selected
+logistic_regression,0.8347,0.8539,0.7834,0.8123,0.9070,0.0133,0.0597,0.0677,0.0173,0.0114,0.8689,0.8333,0.8929,0.8621,0.9589,0.8485,3.0000,5.0000,0.9329,9.1486,False
+random_forest,0.8096,0.8100,0.7735,0.7870,0.9023,0.0321,0.0547,0.0826,0.0388,0.0327,0.8525,0.8065,0.8929,0.8475,0.9481,0.8182,3.0000,6.0000,0.9659,28.1028,False
+gradient_boosting,0.8180,0.8456,0.7561,0.7921,0.8850,0.0364,0.0817,0.0696,0.0350,0.0298,0.9016,0.8667,0.9286,0.8966,0.9600,0.8788,2.0000,4.0000,0.9615,6.3598,False
+svm_rbf,0.8387,0.8580,0.7921,0.8176,0.9013,0.0283,0.0767,0.0751,0.0310,0.0192,0.8525,0.8065,0.8929,0.8475,0.9535,0.8182,3.0000,6.0000,0.9404,4.0559,True
