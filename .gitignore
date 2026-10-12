@@ -7,3 +7,10 @@ venv/
 mlruns/
 mlartifacts/
 .DS_Store
+
+# test / coverage outputs
+.coverage
+.coverage.*
+htmlcov/
+test-reports/
+coverage.xml
