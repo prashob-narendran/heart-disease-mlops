@@ -17,7 +17,7 @@ function Step($title, [scriptblock]$cmd) {
 Step "1/8 Data: download or verify checksum" { python scripts/download_data.py }
 Step "2/8 Data: clean"                       { python -m src.data_processing }
 Step "3/8 EDA figures"                       { python -m src.eda }
-Step "4/8 Lint"                              { flake8 src scripts tests }
+Step "4/8 Lint"                              { flake8 src scripts tests api }
 Step "5/8 Unit tests"                        { pytest -q }
 Step "6/8 Train + MLflow tracking"           { python -m src.train }
 Step "7/8 Model quality gate"                { python scripts/check_model.py }

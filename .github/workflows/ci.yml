@@ -1,13 +1,16 @@
 # CI pipeline for the heart-disease MLOps project.
 #
-#   lint ──► test ──► train
+#   lint ──► test ──► train ──► docker
 #
 # * lint  : flake8 on all Python code (fails fast, ~20 s)
-# * test  : 42 unit + integration tests with coverage; JUnit + coverage
+# * test  : 64 unit, integration and API tests with coverage; JUnit + coverage
 #           reports uploaded as artifacts
 # * train : verifies the dataset checksum, cleans the data, trains and
 #           tracks all models with MLflow, enforces a model quality gate,
 #           scores a sample patient, uploads model + reports + mlruns
+# * docker: builds the API image with the model trained in this run, runs
+#           the container, waits for the HEALTHCHECK, smoke-tests every
+#           endpoint, and on pushes to main publishes the image to GHCR
 #
 # Any failing step fails the job, and later jobs do not run.
 
@@ -49,7 +52,7 @@ jobs:
         run: pip install flake8==7.1.1
 
       - name: Run flake8
-        run: flake8 src scripts tests --count --show-source --statistics
+        run: flake8 src scripts tests api --count --show-source --statistics
 
   test:
     name: Unit & integration tests
@@ -75,7 +78,7 @@ jobs:
           mkdir -p test-reports
           pytest -v \
             --junitxml=test-reports/junit.xml \
-            --cov=src --cov-report=term \
+            --cov=src --cov=api --cov-report=term \
             --cov-report=xml:test-reports/coverage.xml \
             --cov-report=html:test-reports/coverage-html
 
@@ -166,3 +169,77 @@ jobs:
             reports/figures/1*.png
             mlruns/
           retention-days: 30
+
+  docker:
+    name: Build, run & smoke-test container
+    needs: train
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_LOCAL: heart-api:ci
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use the model trained and validated in this run
+        uses: actions/download-artifact@v7
+        with:
+          name: model
+          path: models/
+
+      - name: Show model packaged into the image
+        run: python3 -c "import json; m=json.load(open('models/metadata.json')); print(m['model_name'], 'trained', m['trained_at_utc'])"
+
+      - name: Build image
+        run: docker build -t "$IMAGE_LOCAL" .
+
+      - name: Run container
+        run: docker run -d --name heart-api -p 8000:8000 "$IMAGE_LOCAL"
+
+      - name: Smoke-test the running container
+        run: python3 scripts/smoke_test_api.py --url http://localhost:8000 --wait 90
+
+      - name: Wait for Docker HEALTHCHECK to report healthy
+        run: |
+          for i in $(seq 1 20); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' heart-api)
+            echo "health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 3
+          done
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs heart-api || true
+
+      - name: Image summary
+        if: always()
+        run: |
+          {
+            echo "### Docker image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`$IMAGE_LOCAL\` |"
+            echo "| Size | $(docker image inspect "$IMAGE_LOCAL" --format '{{.Size}}' | awk '{printf "%.0f MB", $1/1024/1024}') |"
+            echo "| Health | $(docker inspect --format '{{.State.Health.Status}}' heart-api 2>/dev/null) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to GitHub Container Registry (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/heart-disease-api
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "$IMAGE_LOCAL" "$IMAGE:latest"
+          docker tag "$IMAGE_LOCAL" "$IMAGE:sha-$SHORT_SHA"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:sha-$SHORT_SHA"
+          echo "| Published | \`$IMAGE:sha-$SHORT_SHA\`, \`$IMAGE:latest\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f heart-api || true
