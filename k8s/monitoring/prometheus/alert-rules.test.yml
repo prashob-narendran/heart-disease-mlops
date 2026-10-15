@@ -1,0 +1,107 @@
+# Unit tests for alert-rules.yml:  promtool test rules alert-rules.test.yml
+rule_files:
+  - alert-rules.yml
+evaluation_interval: 15s
+
+tests:
+  # A pod stops answering: HeartApiPodDown fires after 1 minute.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="heart-api", pod="heart-api-a"}'
+        values: '1 1 0 0 0 0 0 0'
+      - series: 'up{job="heart-api", pod="heart-api-b"}'
+        values: '1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: HeartApiPodDown
+        exp_alerts: []
+      - eval_time: 105s
+        alertname: HeartApiPodDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: heart-api, pod: heart-api-a}
+            exp_annotations:
+              summary: "heart-api pod heart-api-a is not answering /metrics"
+              description: "The scrape of heart-api-a has failed for 1 minute."
+
+  # 10% of requests fail with 500: HeartApiHighErrorRate fires; 0% does not.
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_requests_total{endpoint="/predict", method="POST", status="200"}'
+        values: '0+9x40'
+      - series: 'heart_api_requests_total{endpoint="/predict", method="POST", status="500"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: HeartApiHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: More than 5% of requests fail with a server error
+              description: "5xx ratio is 10% over the last 5 minutes."
+
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_requests_total{endpoint="/predict", method="POST", status="200"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: HeartApiHighErrorRate
+        exp_alerts: []
+
+  # Model failed to load: HeartApiModelNotLoaded fires after 1 minute.
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_model_loaded{job="heart-api", pod="heart-api-a"}'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: HeartApiModelNotLoaded
+        exp_alerts:
+          - exp_labels: {severity: critical, job: heart-api, pod: heart-api-a}
+            exp_annotations:
+              summary: "Model not loaded in heart-api-a"
+              description: The pod is running but cannot predict (/health returns 503).
+
+  # Only high-risk patients for a while: HeartApiPredictionDrift fires;
+  # a normal mix (~40% disease) does not.
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_predictions_total{label="disease", risk_level="high"}'
+        values: '0+20x60'
+      - series: 'heart_api_predictions_total{label="no_disease", risk_level="low"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HeartApiPredictionDrift
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Share of "disease" predictions far above the training prevalence (~46%)
+              description: "95.24% of recent patients were predicted as disease. Possible input drift or a changed patient population: review recent inputs and consider retraining."
+
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_predictions_total{label="disease", risk_level="high"}'
+        values: '0+4x60'
+      - series: 'heart_api_predictions_total{label="no_disease", risk_level="low"}'
+        values: '0+6x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HeartApiPredictionDrift
+        exp_alerts: []
+
+  # One request in three is invalid: HeartApiHighInvalidInputRate fires.
+  - interval: 15s
+    input_series:
+      - series: 'heart_api_requests_total{endpoint="/predict", method="POST", status="200"}'
+        values: '0+2x40'
+      - series: 'heart_api_requests_total{endpoint="/predict", method="POST", status="422"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HeartApiHighInvalidInputRate
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: More than 20% of prediction requests are rejected as invalid
+              description: Clients are sending malformed or out-of-range patient data (data-quality issue upstream).

@@ -1,0 +1,48 @@
+# Monitoring stack for the heart-disease API: Prometheus + Grafana.
+#
+#   Deploy (after the app, which creates the heart-disease namespace):
+#     kubectl apply -k k8s/monitoring/
+#   Prometheus: http://localhost:9090     Grafana: http://localhost:3000
+#   Remove:     kubectl delete -k k8s/monitoring/
+#
+# Config files are kept as plain files (validated in CI with promtool) and
+# turned into ConfigMaps here. The generated names carry a content hash, so
+# editing a file and re-applying rolls the pod automatically.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - prometheus/rbac.yaml
+  - prometheus/deployment.yaml
+  - prometheus/service.yaml
+  - grafana/deployment.yaml
+  - grafana/service.yaml
+configMapGenerator:
+  - name: prometheus-config
+    namespace: monitoring
+    files:
+      - prometheus/prometheus.yml
+      - prometheus/alert-rules.yml
+  - name: grafana-datasources
+    namespace: monitoring
+    files:
+      - grafana/datasource.yaml
+  - name: grafana-dashboard-provider
+    namespace: monitoring
+    files:
+      - grafana/dashboard-provider.yaml
+  - name: grafana-dashboards
+    namespace: monitoring
+    files:
+      - grafana/heart-api-dashboard.json
+secretGenerator:
+  # Demo credentials for the Grafana admin user (viewing needs no login).
+  # In production, create the Secret out-of-band, never commit passwords.
+  - name: grafana-admin
+    namespace: monitoring
+    literals:
+      - admin-user=admin
+      - admin-password=mlops-demo
+generatorOptions:
+  labels:
+    app.kubernetes.io/part-of: heart-disease-mlops

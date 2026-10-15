@@ -1,7 +1,8 @@
 """End-to-end smoke test for a running API (local, Docker or Kubernetes).
 
 Waits for /health, then checks /model-info, a valid /predict, a batch with
-missing values and an invalid request (must be rejected with 422).
+missing values, an invalid request (must be rejected with 422) and the
+Prometheus /metrics endpoint (must count the predictions just made).
 Exits 0 if every check passes, 1 otherwise. Uses only the standard
 library, so it runs anywhere Python does (CI runner, Windows, a pod).
 
@@ -32,6 +33,14 @@ def call(method: str, url: str, body=None, timeout: float = 10):
             return r.status, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b"null")
+
+
+def get_text(url: str, timeout: float = 10) -> tuple[int, str]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, ""
 
 
 def wait_for_health(base: str, seconds: int) -> bool:
@@ -89,6 +98,12 @@ def main() -> int:
 
     s, r = call("POST", f"{base}/predict", {**patient, "sex": 5})
     check("POST /predict (invalid sex=5) -> 422", s == 422)
+
+    s, text = get_text(f"{base}/metrics")
+    counted = [ln for ln in text.splitlines()
+               if ln.startswith("heart_api_predictions_total{")]
+    check("GET /metrics -> 200 (Prometheus, predictions counted)",
+          s == 200 and bool(counted), f"{len(counted)} prediction series")
 
     print("Smoke test:", "PASSED" if failures == 0 else
           f"FAILED ({failures} check(s))")

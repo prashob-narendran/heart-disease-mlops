@@ -6,10 +6,12 @@ nor the committed model, and run in CI exactly as on a laptop.
 """
 
 import json
+import logging
 
 import joblib
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY, generate_latest
 from sklearn.base import clone
 
 from api.main import create_app
@@ -170,3 +172,84 @@ def test_batch_matches_single(client):
 def test_batch_size_limits(client, n):
     r = client.post("/predict/batch", json={"patients": [patient()] * n})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------- metrics
+def sample(name, **labels):
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_metrics_endpoint_exposes_prometheus_format(client):
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    for name in ("heart_api_requests_total",
+                 "heart_api_request_duration_seconds_bucket",
+                 "heart_api_predictions_total", "heart_api_model_loaded"):
+        assert name in r.text
+
+
+def test_metrics_count_requests_and_predictions(client):
+    before_req = sample("heart_api_requests_total", method="POST",
+                        endpoint="/predict", status="200")
+    before_lat = sample("heart_api_request_duration_seconds_count",
+                        method="POST", endpoint="/predict")
+    body = client.post("/predict", json=patient()).json()
+    before_pred = sample("heart_api_predictions_total", label=body["label"],
+                         risk_level=body["risk_level"])
+    client.post("/predict", json=patient())
+    assert sample("heart_api_requests_total", method="POST",
+                  endpoint="/predict", status="200") == before_req + 2
+    assert sample("heart_api_request_duration_seconds_count", method="POST",
+                  endpoint="/predict") == before_lat + 2
+    assert sample("heart_api_predictions_total", label=body["label"],
+                  risk_level=body["risk_level"]) == before_pred + 1
+
+
+def test_metrics_label_errors_and_unknown_paths(client):
+    before_422 = sample("heart_api_requests_total", method="POST",
+                        endpoint="/predict", status="422")
+    client.post("/predict", json=patient(sex=5))
+    assert sample("heart_api_requests_total", method="POST",
+                  endpoint="/predict", status="422") == before_422 + 1
+    # raw URLs never become label values (bounded cardinality)
+    client.get("/no/such/path/123")
+    assert sample("heart_api_requests_total", method="GET",
+                  endpoint="unmatched", status="404") >= 1
+    assert "/no/such/path/123" not in client.get("/metrics").text
+
+
+def test_metrics_batch_and_probability(client):
+    before_n = sample("heart_api_batch_size_count")
+    before_p = sample("heart_api_prediction_probability_count")
+    client.post("/predict/batch", json={"patients": [patient()] * 3})
+    assert sample("heart_api_batch_size_count") == before_n + 1
+    assert sample("heart_api_prediction_probability_count") == before_p + 3
+
+
+def test_metrics_model_state(model_files, tmp_path):
+    # one app per process in production; here each app re-sets the gauges
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setenv("MODEL_PATH", str(model_files / "model.joblib"))
+        mp.setenv("METADATA_PATH", str(model_files / "metadata.json"))
+        with TestClient(create_app()):
+            assert sample("heart_api_model_loaded") == 1
+            assert sample("heart_api_model_info", model_name="test_model",
+                          model_version="7") == 1
+        mp.setenv("MODEL_PATH", str(tmp_path / "missing.joblib"))
+        with TestClient(create_app()):
+            assert sample("heart_api_model_loaded") == 0
+            assert "heart_api_model_info{" not in generate_latest().decode()
+    finally:
+        mp.undo()
+
+
+def test_probe_requests_are_not_logged_at_info(client, caplog):
+    with caplog.at_level(logging.INFO, logger="heart-api"):
+        client.get("/health")
+        client.get("/metrics")
+        client.post("/predict", json=patient())
+    paths = [json.loads(r.message).get("path") for r in caplog.records
+             if '"event": "request"' in r.message]
+    assert paths == ["/predict"]

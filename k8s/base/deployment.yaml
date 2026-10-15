@@ -27,6 +27,11 @@ spec:
       maxSurge: 1            # start one new pod before stopping an old one
   template:
     metadata:
+      annotations:
+        # picked up by the Prometheus pod discovery (k8s/monitoring)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
       labels:
         app.kubernetes.io/name: heart-api
         app.kubernetes.io/component: inference-api

@@ -13,7 +13,7 @@ Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Di
 | 5. CI/CD (GitHub Actions) | ✅ done |
 | 6. Docker + FastAPI | ✅ done |
 | 7. Kubernetes deployment | ✅ done |
-| 8. Monitoring & logging | ⏳ next |
+| 8. Monitoring & logging | ✅ done |
 
 ## Dataset
 
@@ -37,7 +37,7 @@ python -m src.eda                  # -> reports/figures/*.png
 python -m src.train                # tune 4 models, log to MLflow, save models/model.joblib
 python scripts/check_model.py      # model quality gate
 python -m src.predict --input samples/sample_patient.json
-pytest                             # 64 unit, integration and API tests
+pytest                             # 70 unit, integration and API tests
 flake8 src scripts tests api           # lint
 mlflow ui --backend-store-uri mlruns   # open http://127.0.0.1:5000
 
@@ -63,21 +63,24 @@ If the UCI site is unreachable, the download script falls back to the official `
 ├── reports/figures/         EDA plots (used in the report)
 ├── .github/workflows/ci.yml GitHub Actions: lint -> test -> train -> docker -> k8s
 ├── api/
-│   ├── main.py              FastAPI app: /health, /model-info, /predict, /predict/batch
+│   ├── main.py              FastAPI app: /health, /model-info, /predict, /predict/batch, /metrics
+│   ├── metrics.py           Prometheus metrics (requests, latency, predictions, model)
 │   └── schemas.py           request/response models with input validation
 ├── Dockerfile, .dockerignore, requirements-api.txt   container image
 ├── k8s/
 │   ├── base/                namespace, configmap, deployment, service, HPA, PDB
 │   ├── kustomization.yaml   default overlay: image from GHCR   (kubectl apply -k k8s/)
 │   ├── local/               overlay: locally built heart-api:local (laptop / CI kind)
-│   └── addons/metrics-server/  metrics for the HPA (local clusters)
+│   ├── addons/metrics-server/  metrics for the HPA (local clusters)
+│   └── monitoring/          Prometheus (config, alert rules + tests) and Grafana (dashboard)
 ├── samples/                 example patient JSON for inference
 ├── scripts/
 │   ├── download_data.py     dataset download + checksum verification
 │   ├── check_model.py       model quality gate (fails below thresholds)
 │   ├── smoke_test_api.py    end-to-end test of a running API (local/Docker/K8s)
 │   ├── k8s_deploy.ps1/.sh   deploy to Kubernetes, wait for rollout, smoke-test
-│   ├── load_test.py         concurrent load; shows requests per pod (X-Served-By)
+│   ├── load_test.py         concurrent load; requests per pod; --drift / --invalid scenarios
+│   ├── check_monitoring.py  verifies Prometheus targets, rules and the Grafana dashboard
 │   └── reproduce.ps1/.sh    whole pipeline in one command
 ├── MLproject, python_env.yaml  MLflow Project definition
 ├── src/
@@ -95,7 +98,7 @@ If the UCI site is unreachable, the download script falls back to the official `
 ├── tests/test_model.py      pipeline/model tests on synthetic data
 ├── tests/test_predict.py    inference tests
 ├── tests/test_integration.py end-to-end: train.py + MLflow + EDA on synthetic data
-├── tests/test_api.py        22 API tests (FastAPI TestClient)
+├── tests/test_api.py        28 API + metrics tests (FastAPI TestClient)
 ├── requirements.txt         pinned dependencies
 └── setup.cfg                flake8 + pytest config
 ```
@@ -154,11 +157,11 @@ Example response:
 `.github/workflows/ci.yml` runs on every push and pull request to `main`:
 
 1. **Lint:** flake8 (fails on any style error)
-2. **Test:** 64 tests (data, model, inference, end-to-end, API) with coverage; JUnit XML + coverage reports uploaded
+2. **Test:** 70 tests (data, model, inference, end-to-end, API) with coverage; JUnit XML + coverage reports uploaded
 3. **Train:** verify dataset checksum → clean → train and track with MLflow → **quality gate** (CV ROC-AUC ≥ 0.85, CV recall ≥ 0.70, test ROC-AUC ≥ 0.80) → sample inference; model, reports and `mlruns/` uploaded as artifacts; results table written to the job summary
 
 4. **Docker:** build the API image with the model trained in step 3 → run the container → smoke-test all endpoints → wait for the Docker `HEALTHCHECK` to report healthy → on pushes to `main`, publish to `ghcr.io/prashob-narendran/heart-disease-api` (`latest` and `sha-<commit>`)
-5. **K8s:** create a throw-away kind cluster → load the image → `kubectl apply -k k8s/local/` → wait for the rollout → smoke-test through the Service → rolling update and rollback
+5. **K8s:** `promtool` validates the Prometheus config and unit-tests the alert rules → create a throw-away kind cluster → load the image → `kubectl apply -k k8s/local/` → wait for the rollout → smoke-test through the Service → rolling update and rollback → deploy Prometheus + Grafana → generate traffic → verify scraping, alert rules and dashboard (`check_monitoring.py`)
 
 Each job only runs if the previous one passed, so a lint or test failure stops the pipeline.
 
@@ -168,6 +171,7 @@ Each job only runs if the previous one passed, so a lint or test failure stops t
 |---|---|---|
 | GET | `/health` | 200 when the model is loaded, 503 otherwise (used by Docker/Kubernetes probes) |
 | GET | `/model-info` | served model, version, metrics, parameters, dataset checksum, commit |
+| GET | `/metrics` | Prometheus metrics (requests, latency, predictions, model) |
 | POST | `/predict` | score one patient |
 | POST | `/predict/batch` | score 1-100 patients |
 | GET | `/docs` | interactive Swagger UI |
@@ -215,3 +219,41 @@ kubectl delete -k k8s/                                        # remove everythin
 ```
 
 Every response carries an `X-Served-By` header with the pod name, so load balancing is visible from the client.
+
+## Monitoring & logging (Stage 8)
+
+```
+heart-api pods ── GET /metrics ──► Prometheus (scrapes every 5 s, evaluates 7 alert rules) ──► Grafana dashboard
+      │                              http://localhost:9090                                 http://localhost:3000
+      └── JSON log line per request / prediction ──► kubectl logs (stdout, ready for any log shipper)
+```
+
+**Metrics** (`api/metrics.py`, exposed at `/metrics`):
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `heart_api_requests_total{method,endpoint,status}` | counter | requests by route template and status code |
+| `heart_api_request_duration_seconds` | histogram | latency (p50/p95/p99 in Grafana) |
+| `heart_api_requests_in_flight` | gauge | concurrent requests |
+| `heart_api_predictions_total{label,risk_level}` | counter | what the model predicts |
+| `heart_api_prediction_probability` | histogram | distribution of predicted probabilities (drift signal) |
+| `heart_api_batch_size` | histogram | patients per batch request |
+| `heart_api_model_loaded`, `heart_api_model_info{model_name,model_version}` | gauge | which model is served |
+| `process_cpu_seconds_total`, `process_resident_memory_bytes` | counter/gauge | per-pod resources (Python client) |
+
+**Prometheus** discovers the heart-api pods through the Kubernetes API (pods opt in with `prometheus.io/*` annotations; RBAC limited to listing pods in `heart-disease`), so pods added by the HPA are scraped automatically.
+
+**Alert rules** (`k8s/monitoring/prometheus/alert-rules.yml`, unit-tested with `promtool test rules`): `HeartApiNoTargets`, `HeartApiPodDown`, `HeartApiModelNotLoaded`, `HeartApiHighErrorRate` (>5 % 5xx), `HeartApiHighLatency` (p95 > 500 ms), `HeartApiHighInvalidInputRate` (>20 % 422), `HeartApiPredictionDrift` (>80 % "disease" vs ~46 % training prevalence).
+
+**Grafana** is provisioned from files: Prometheus data source + the *Heart Disease API - Service & Model Monitoring* dashboard (service overview, traffic and latency, per-pod load/CPU/memory, model behaviour, errors and active alerts). Anonymous read-only access; admin login `admin` / `mlops-demo` (demo only).
+
+**Logging:** one JSON line per request (`request_id`, `path`, `status`, `latency_ms`, `instance` = pod) and per prediction, written to stdout. Probe and scrape calls are logged at DEBUG so they do not drown real traffic.
+
+```powershell
+kubectl apply -k k8s/monitoring/                       # after the app is deployed
+kubectl -n monitoring get pods,svc
+python scripts/check_monitoring.py                     # targets, rules, dashboard
+python scripts/load_test.py --duration 180 -c 8         # watch the dashboard
+python scripts/load_test.py --duration 240 -c 2 --drift --invalid 0.3   # fire model alerts
+kubectl -n heart-disease logs -l app.kubernetes.io/name=heart-api --tail=20 --prefix
+```

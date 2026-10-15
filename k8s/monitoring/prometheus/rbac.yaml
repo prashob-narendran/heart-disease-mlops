@@ -1,0 +1,41 @@
+# Prometheus discovers the heart-api pods through the Kubernetes API.
+# Least privilege: a Role (not a ClusterRole) that can only list/watch pods
+# in the heart-disease namespace, bound to Prometheus's ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: heart-disease-mlops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-discovery
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: heart-disease-mlops
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-discovery
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: heart-disease-mlops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring

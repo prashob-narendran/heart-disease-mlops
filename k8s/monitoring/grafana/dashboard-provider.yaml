@@ -1,0 +1,11 @@
+# Loads every dashboard JSON file from /etc/grafana/dashboards.
+apiVersion: 1
+providers:
+  - name: heart-disease-mlops
+    folder: Heart Disease MLOps
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards

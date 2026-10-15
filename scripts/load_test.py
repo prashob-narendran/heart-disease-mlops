@@ -6,17 +6,29 @@ many requests each pod answered. That shows the Kubernetes Service load
 balancing across replicas, and a longer run generates enough CPU for the
 HorizontalPodAutoscaler to add pods.
 
+Patients are cycled from samples/load_test_patients.json (8 patients, ~40%
+predicted "disease", close to the training prevalence), so the monitoring
+dashboard shows a realistic mix. Two options simulate problems for the
+Stage 8 monitoring demo:
+  --drift          only high-risk patients -> "disease" share near 100%
+                   (raises the HeartApiPredictionDrift alert)
+  --invalid 0.3    30% of requests carry invalid data (sex=5) -> HTTP 422
+                   (raises the HeartApiHighInvalidInputRate alert)
+
 Uses only the standard library.
 
 Usage:
     python scripts/load_test.py                         # 200 requests, 8 threads
     python scripts/load_test.py -n 2000 -c 16           # heavier
     python scripts/load_test.py --duration 180 -c 16    # sustained (HPA demo)
+    python scripts/load_test.py --duration 300 -c 4 --drift
+    python scripts/load_test.py --duration 300 -c 4 --invalid 0.3
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import statistics
 import sys
@@ -61,11 +73,22 @@ def main() -> int:
     ap.add_argument("-c", "--concurrency", type=int, default=8)
     ap.add_argument("--duration", type=int, default=0,
                     help="run for N seconds instead of a fixed count")
+    ap.add_argument("--drift", action="store_true",
+                    help="send only high-risk patients (simulated drift)")
+    ap.add_argument("--invalid", type=float, default=0.0,
+                    help="fraction of requests with invalid data (0-1)")
     args = ap.parse_args()
 
     url = args.url.rstrip("/") + "/predict"
-    body = (ROOT / "samples" / "sample_patient.json").read_bytes()
-    json.loads(body)  # fail early if the sample is broken
+    patients = json.loads((ROOT / "samples" / "load_test_patients.json")
+                          .read_text())
+    if args.drift:      # the two highest-risk patients of the pool
+        patients = [patients[0], patients[2]]
+    bodies = [json.dumps(p).encode() for p in patients]
+    invalid = json.dumps({**patients[0], "sex": 5}).encode()
+    # deterministic mix: every k-th request is invalid
+    every = round(1 / args.invalid) if args.invalid > 0 else 0
+    sequence = itertools.count()
 
     lock = threading.Lock()
     latencies: list[float] = []
@@ -85,6 +108,10 @@ def main() -> int:
 
     def worker() -> None:
         while take():
+            with lock:
+                i = next(sequence)
+            body = (invalid if every and i % every == every - 1
+                    else bodies[i % len(bodies)])
             status, ms, pod = one_request(url, body)
             if status == 0:          # server unreachable: don't spin
                 time.sleep(0.5)
@@ -95,6 +122,10 @@ def main() -> int:
                     latencies.append(ms)
 
     mode = (f"{args.duration}s" if deadline else f"{args.requests} requests")
+    if args.drift:
+        mode += ", DRIFT (high-risk patients only)"
+    if every:
+        mode += f", 1 in {every} requests invalid"
     print(f"Load test: {mode}, {args.concurrency} threads -> {url}")
     t0 = time.perf_counter()
     with ThreadPoolExecutor(args.concurrency) as pool:
@@ -114,7 +145,8 @@ def main() -> int:
     print("\nRequests per pod (X-Served-By):")
     for pod, n in pods.most_common():
         print(f"  {pod:<40} {n:>6}  ({100 * n / total:.0f}%)")
-    return 0 if ok == total else 1
+    expected_ok = total - (statuses.get(422, 0) if every else 0)
+    return 0 if ok == expected_ok else 1
 
 
 if __name__ == "__main__":

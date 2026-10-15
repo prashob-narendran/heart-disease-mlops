@@ -1,0 +1,81 @@
+# Alerting rules for the heart-disease prediction API.
+# Visible under Alerts in the Prometheus UI (http://localhost:9090/alerts).
+# Unit-tested in CI with `promtool test rules alert-rules.test.yml`.
+groups:
+  - name: heart-api.availability
+    rules:
+      - alert: HeartApiNoTargets
+        expr: absent(up{job="heart-api"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: No heart-api pods are being scraped
+          description: Prometheus has not discovered any heart-api pod for 2 minutes. Is the deployment running?
+
+      - alert: HeartApiPodDown
+        expr: up{job="heart-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "heart-api pod {{ $labels.pod }} is not answering /metrics"
+          description: "The scrape of {{ $labels.pod }} has failed for 1 minute."
+
+      - alert: HeartApiModelNotLoaded
+        expr: heart_api_model_loaded == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Model not loaded in {{ $labels.pod }}"
+          description: The pod is running but cannot predict (/health returns 503).
+
+  - name: heart-api.performance
+    rules:
+      - alert: HeartApiHighErrorRate
+        expr: |
+          sum(rate(heart_api_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(heart_api_requests_total[5m])), 1e-9) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 5% of requests fail with a server error
+          description: "5xx ratio is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HeartApiHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(heart_api_request_duration_seconds_bucket{endpoint="/predict"}[2m]))) > 0.5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: /predict p95 latency above 500 ms
+          description: "p95 latency is {{ $value | humanizeDuration }}. Check CPU saturation and whether the HPA is scaling out."
+
+  - name: heart-api.model
+    rules:
+      - alert: HeartApiHighInvalidInputRate
+        expr: |
+          sum(rate(heart_api_requests_total{endpoint=~"/predict.*", status="422"}[5m]))
+            / clamp_min(sum(rate(heart_api_requests_total{endpoint=~"/predict.*"}[5m])), 1e-9) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 20% of prediction requests are rejected as invalid
+          description: Clients are sending malformed or out-of-range patient data (data-quality issue upstream).
+
+      - alert: HeartApiPredictionDrift
+        expr: |
+          sum(rate(heart_api_predictions_total{label="disease"}[10m]))
+            / clamp_min(sum(rate(heart_api_predictions_total[10m])), 1e-9) > 0.8
+          and sum(increase(heart_api_predictions_total[10m])) > 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Share of "disease" predictions far above the training prevalence (~46%)
+          description: "{{ $value | humanizePercentage }} of recent patients were predicted as disease. Possible input drift or a changed patient population: review recent inputs and consider retraining."

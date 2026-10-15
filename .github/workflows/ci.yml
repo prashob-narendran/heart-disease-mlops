@@ -1,9 +1,9 @@
 # CI pipeline for the heart-disease MLOps project.
 #
-#   lint ──► test ──► train ──► docker ──► k8s
+#   lint ──► test ──► train ──► docker ──► k8s (+ monitoring)
 #
 # * lint  : flake8 on all Python code (fails fast, ~20 s)
-# * test  : 64 unit, integration and API tests with coverage; JUnit + coverage
+# * test  : 70 unit, integration and API tests with coverage; JUnit + coverage
 #           reports uploaded as artifacts
 # * train : verifies the dataset checksum, cleans the data, trains and
 #           tracks all models with MLflow, enforces a model quality gate,
@@ -14,7 +14,10 @@
 # * k8s   : creates a throw-away Kubernetes cluster (kind), deploys the image
 #           with the same manifests used on the laptop (k8s/local overlay),
 #           waits for the rollout, smoke-tests through the Service, then
-#           performs a rolling update and a rollback
+#           performs a rolling update and a rollback; finally deploys
+#           Prometheus + Grafana (k8s/monitoring), generates traffic and
+#           verifies that the pods are scraped, the alert rules are loaded
+#           and the Grafana dashboard is provisioned
 #
 # Any failing step fails the job, and later jobs do not run.
 
@@ -255,7 +258,7 @@ jobs:
     name: Deploy to Kubernetes (kind) & smoke-test
     needs: docker
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       KIND_VERSION: v0.31.0
       NS: heart-disease
@@ -270,6 +273,14 @@ jobs:
 
       - name: Build image (heart-api:local)
         run: docker build -t heart-api:local .
+
+      - name: Validate Prometheus config and unit-test alert rules (promtool)
+        run: |
+          PROM=prom/prometheus:v3.5.0
+          docker run --rm -v "$PWD/k8s/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool "$PROM" check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/k8s/monitoring/prometheus:/etc/prometheus:ro" \
+            -w /etc/prometheus --entrypoint promtool "$PROM" test rules alert-rules.test.yml
 
       - name: Install kind
         run: |
@@ -310,12 +321,34 @@ jobs:
           kubectl -n "$NS" rollout status deployment/heart-api --timeout=180s
           kubectl -n "$NS" rollout history deployment/heart-api
 
+      - name: Deploy monitoring (Prometheus + Grafana)
+        run: |
+          kubectl apply -k k8s/monitoring/
+          kubectl -n monitoring rollout status deployment/prometheus --timeout=300s
+          kubectl -n monitoring rollout status deployment/grafana --timeout=300s
+          kubectl -n monitoring get deploy,pods,svc
+
+      - name: Generate traffic and verify monitoring end to end
+        run: |
+          kubectl -n "$NS" port-forward svc/heart-api 8081:8080 > pf-api.log 2>&1 &
+          kubectl -n monitoring port-forward svc/prometheus 9090:9090 > pf-prom.log 2>&1 &
+          kubectl -n monitoring port-forward svc/grafana 3000:3000 > pf-grafana.log 2>&1 &
+          sleep 5
+          python3 scripts/load_test.py --url http://localhost:8081 -n 300 -c 4
+          python3 scripts/load_test.py --url http://localhost:8081 -n 60 -c 2 --invalid 0.3
+          sleep 15   # let Prometheus scrape the new samples (5 s interval)
+          python3 scripts/check_monitoring.py --prometheus http://localhost:9090 \
+            --grafana http://localhost:3000 --min-targets 2 --wait 120 | tee monitoring-check.txt
+
       - name: Diagnostics
         if: always()
         run: |
           kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
           kubectl -n "$NS" describe deployment heart-api || true
           kubectl -n "$NS" logs -l app.kubernetes.io/name=heart-api --tail=30 --prefix || true
+          kubectl -n monitoring get events --sort-by=.lastTimestamp | tail -30 || true
+          kubectl -n monitoring logs deployment/prometheus --tail=30 || true
+          kubectl -n monitoring logs deployment/grafana --tail=30 || true
 
       - name: Kubernetes summary
         if: always()
@@ -325,6 +358,14 @@ jobs:
             echo ""
             echo '```'
             kubectl -n "$NS" get deploy,pods,svc -o wide 2>&1 || true
+            echo '```'
+            echo ""
+            echo "### Monitoring (Prometheus + Grafana)"
+            echo ""
+            echo '```'
+            kubectl -n monitoring get deploy,pods 2>&1 || true
+            echo ""
+            cat monitoring-check.txt 2>/dev/null || echo "monitoring check did not run"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
