@@ -1,0 +1,23 @@
+# "local" overlay: deploys an image built on this machine instead of
+# pulling from GHCR. Used by CI (kind) and on a laptop when the GHCR
+# package is private or you want to test uncommitted changes.
+#
+#   docker build -t heart-api:local .
+#   kubectl apply -k k8s/local/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+images:
+  - name: ghcr.io/prashob-narendran/heart-disease-api
+    newName: heart-api
+    newTag: local
+patches:
+  # never try to pull "heart-api:local" from a registry
+  - target:
+      kind: Deployment
+      name: heart-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

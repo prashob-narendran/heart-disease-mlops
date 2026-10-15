@@ -1,0 +1,98 @@
+# Heart Disease Risk API - Deployment
+#
+# * 2 replicas behind one Service (high availability + load balancing)
+# * rolling updates with zero unavailable pods
+# * startup / readiness / liveness probes on /health
+# * CPU and memory requests/limits (measured idle usage ~120 MB)
+# * hardened pod: non-root, read-only root filesystem, no privilege escalation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heart-api
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/component: inference-api
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heart-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0      # never drop below the desired replica count
+      maxSurge: 1            # start one new pod before stopping an old one
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heart-api
+        app.kubernetes.io/component: inference-api
+        app.kubernetes.io/part-of: heart-disease-mlops
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001         # 'appuser' created in the Dockerfile
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Tag is set in kustomization.yaml (images:)
+          image: ghcr.io/prashob-narendran/heart-disease-api
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: heart-api-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # Gives the model up to 60 s to load before other probes start
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # Pod receives traffic only while /health returns 200
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Container is restarted if /health stops answering
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # Let the Service stop routing to this pod before it shuts down
+              sleep:
+                seconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

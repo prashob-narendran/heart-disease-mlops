@@ -1,0 +1,12 @@
+# Runtime settings, kept out of the image so they can change without a rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heart-api-config
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/part-of: heart-disease-mlops
+data:
+  LOG_LEVEL: "INFO"
+  WORKERS: "1"          # one uvicorn worker per pod; scale with replicas instead

@@ -111,6 +111,7 @@ def test_response_headers(client):
                     headers={"X-Request-ID": "abc123"})
     assert r.headers["X-Request-ID"] == "abc123"
     assert float(r.headers["X-Process-Time-ms"]) >= 0
+    assert r.headers["X-Served-By"]          # pod/container hostname
 
 
 @pytest.mark.parametrize("bad", [

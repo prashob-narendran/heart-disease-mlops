@@ -1,0 +1,12 @@
+# Base manifests (environment-independent). Deployed through an overlay:
+#   kubectl apply -k k8s/          image from GHCR (CI-published)
+#   kubectl apply -k k8s/local/    image built locally (heart-api:local)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - pdb.yaml

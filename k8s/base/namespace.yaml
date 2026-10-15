@@ -1,0 +1,12 @@
+# All project resources live in their own namespace, so they are easy to
+# list, isolate and delete:  kubectl delete namespace heart-disease
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: heart-disease
+  labels:
+    app.kubernetes.io/part-of: heart-disease-mlops
+    # Pod Security Admission: reject any pod that is not fully hardened
+    # (non-root, no privilege escalation, all capabilities dropped, seccomp)
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

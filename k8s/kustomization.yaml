@@ -1,0 +1,12 @@
+# Default deployment: the image CI published to GitHub Container Registry.
+#   Deploy:  kubectl apply -k k8s/
+#   Remove:  kubectl delete -k k8s/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base
+images:
+  # For a reproducible, auditable deployment pin an immutable tag,
+  # e.g. newTag: sha-c6c4a6c
+  - name: ghcr.io/prashob-narendran/heart-disease-api
+    newTag: latest

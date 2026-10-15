@@ -1,6 +1,6 @@
 # CI pipeline for the heart-disease MLOps project.
 #
-#   lint ──► test ──► train ──► docker
+#   lint ──► test ──► train ──► docker ──► k8s
 #
 # * lint  : flake8 on all Python code (fails fast, ~20 s)
 # * test  : 64 unit, integration and API tests with coverage; JUnit + coverage
@@ -11,6 +11,10 @@
 # * docker: builds the API image with the model trained in this run, runs
 #           the container, waits for the HEALTHCHECK, smoke-tests every
 #           endpoint, and on pushes to main publishes the image to GHCR
+# * k8s   : creates a throw-away Kubernetes cluster (kind), deploys the image
+#           with the same manifests used on the laptop (k8s/local overlay),
+#           waits for the rollout, smoke-tests through the Service, then
+#           performs a rolling update and a rollback
 #
 # Any failing step fails the job, and later jobs do not run.
 
@@ -238,8 +242,92 @@ jobs:
           docker tag "$IMAGE_LOCAL" "$IMAGE:sha-$SHORT_SHA"
           docker push "$IMAGE:latest"
           docker push "$IMAGE:sha-$SHORT_SHA"
-          echo "| Published | \`$IMAGE:sha-$SHORT_SHA\`, \`$IMAGE:latest\` |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "**Published:** \`$IMAGE:sha-$SHORT_SHA\`, \`$IMAGE:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop container
         if: always()
         run: docker rm -f heart-api || true
+
+  k8s:
+    name: Deploy to Kubernetes (kind) & smoke-test
+    needs: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      KIND_VERSION: v0.31.0
+      NS: heart-disease
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use the model trained and validated in this run
+        uses: actions/download-artifact@v7
+        with:
+          name: model
+          path: models/
+
+      - name: Build image (heart-api:local)
+        run: docker build -t heart-api:local .
+
+      - name: Install kind
+        run: |
+          curl -sSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x kind && sudo mv kind /usr/local/bin/kind
+          kind version
+          kubectl version --client
+
+      - name: Create cluster
+        run: |
+          kind create cluster --name heart --wait 120s
+          kubectl get nodes -o wide
+
+      - name: Load image into the cluster
+        run: kind load docker-image heart-api:local --name heart
+
+      - name: Deploy manifests (kubectl apply -k k8s/local/)
+        run: kubectl apply -k k8s/local/
+
+      - name: Wait for rollout
+        run: kubectl -n "$NS" rollout status deployment/heart-api --timeout=180s
+
+      - name: Show resources
+        run: kubectl -n "$NS" get deploy,rs,pods,svc,hpa,pdb,endpointslices -o wide
+
+      - name: Smoke-test through the Service
+        run: |
+          kubectl -n "$NS" port-forward svc/heart-api 8080:8080 > pf.log 2>&1 &
+          python3 scripts/smoke_test_api.py --url http://localhost:8080 --wait 60
+
+      - name: Rolling update and rollback
+        run: |
+          # new revision (same image, new pod template) -> zero-downtime update
+          kubectl -n "$NS" rollout restart deployment/heart-api
+          kubectl -n "$NS" rollout status deployment/heart-api --timeout=180s
+          # go back to the previous revision
+          kubectl -n "$NS" rollout undo deployment/heart-api
+          kubectl -n "$NS" rollout status deployment/heart-api --timeout=180s
+          kubectl -n "$NS" rollout history deployment/heart-api
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
+          kubectl -n "$NS" describe deployment heart-api || true
+          kubectl -n "$NS" logs -l app.kubernetes.io/name=heart-api --tail=30 --prefix || true
+
+      - name: Kubernetes summary
+        if: always()
+        run: |
+          {
+            echo "### Kubernetes deployment (kind)"
+            echo ""
+            echo '```'
+            kubectl -n "$NS" get deploy,pods,svc -o wide 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete cluster
+        if: always()
+        run: kind delete cluster --name heart || true

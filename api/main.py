@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -43,6 +44,9 @@ from src.config import FEATURES, METADATA_FILE, MODEL_FILE
 from src.predict import DEFAULT_THRESHOLD, predict_records
 
 API_VERSION = "1.0.0"
+# Container/pod name (Kubernetes sets the hostname to the pod name), returned
+# in X-Served-By so load balancing across replicas is visible.
+INSTANCE = socket.gethostname()
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
                     format="%(message)s")
@@ -106,6 +110,7 @@ async def request_context(request: Request, call_next):
     elapsed_ms = (time.perf_counter() - start) * 1000
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time-ms"] = f"{elapsed_ms:.2f}"
+    response.headers["X-Served-By"] = INSTANCE
     _log("request", request_id=request_id, method=request.method,
          path=request.url.path, status=response.status_code,
          latency_ms=round(elapsed_ms, 2))
@@ -138,6 +143,7 @@ def root(request: Request):
         "service": "heart-disease-risk-api",
         "version": API_VERSION,
         "model": _meta(request).get("model_name"),
+        "instance": INSTANCE,
         "docs": "/docs",
         "endpoints": ["/health", "/model-info", "/predict",
                       "/predict/batch"],

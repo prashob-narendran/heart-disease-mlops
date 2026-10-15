@@ -1,0 +1,19 @@
+# Exposes the pods behind one stable address and load-balances between them.
+# On Docker Desktop a LoadBalancer Service is reachable at http://localhost:8080
+# (on a cloud cluster it would receive a public IP instead).
+apiVersion: v1
+kind: Service
+metadata:
+  name: heart-api
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: heart-api
+  ports:
+    - name: http
+      port: 8080          # external port
+      targetPort: http    # container port 8000

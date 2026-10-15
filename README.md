@@ -12,8 +12,8 @@ Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Di
 | 4. Packaging & reproducibility | ✅ done |
 | 5. CI/CD (GitHub Actions) | ✅ done |
 | 6. Docker + FastAPI | ✅ done |
-| 7. Kubernetes deployment | ⏳ next |
-| 8. Monitoring & logging | ⏳ |
+| 7. Kubernetes deployment | ✅ done |
+| 8. Monitoring & logging | ⏳ next |
 
 ## Dataset
 
@@ -61,16 +61,23 @@ If the UCI site is unreachable, the download script falls back to the official `
 │   └── processed/           heart_clean.csv
 ├── notebooks/01_eda.ipynb   EDA with findings and modelling implications
 ├── reports/figures/         EDA plots (used in the report)
-├── .github/workflows/ci.yml GitHub Actions: lint -> test -> train -> docker
+├── .github/workflows/ci.yml GitHub Actions: lint -> test -> train -> docker -> k8s
 ├── api/
 │   ├── main.py              FastAPI app: /health, /model-info, /predict, /predict/batch
 │   └── schemas.py           request/response models with input validation
 ├── Dockerfile, .dockerignore, requirements-api.txt   container image
+├── k8s/
+│   ├── base/                namespace, configmap, deployment, service, HPA, PDB
+│   ├── kustomization.yaml   default overlay: image from GHCR   (kubectl apply -k k8s/)
+│   ├── local/               overlay: locally built heart-api:local (laptop / CI kind)
+│   └── addons/metrics-server/  metrics for the HPA (local clusters)
 ├── samples/                 example patient JSON for inference
 ├── scripts/
 │   ├── download_data.py     dataset download + checksum verification
 │   ├── check_model.py       model quality gate (fails below thresholds)
 │   ├── smoke_test_api.py    end-to-end test of a running API (local/Docker/K8s)
+│   ├── k8s_deploy.ps1/.sh   deploy to Kubernetes, wait for rollout, smoke-test
+│   ├── load_test.py         concurrent load; shows requests per pod (X-Served-By)
 │   └── reproduce.ps1/.sh    whole pipeline in one command
 ├── MLproject, python_env.yaml  MLflow Project definition
 ├── src/
@@ -151,6 +158,7 @@ Example response:
 3. **Train:** verify dataset checksum → clean → train and track with MLflow → **quality gate** (CV ROC-AUC ≥ 0.85, CV recall ≥ 0.70, test ROC-AUC ≥ 0.80) → sample inference; model, reports and `mlruns/` uploaded as artifacts; results table written to the job summary
 
 4. **Docker:** build the API image with the model trained in step 3 → run the container → smoke-test all endpoints → wait for the Docker `HEALTHCHECK` to report healthy → on pushes to `main`, publish to `ghcr.io/prashob-narendran/heart-disease-api` (`latest` and `sha-<commit>`)
+5. **K8s:** create a throw-away kind cluster → load the image → `kubectl apply -k k8s/local/` → wait for the rollout → smoke-test through the Service → rolling update and rollback
 
 Each job only runs if the previous one passed, so a lint or test failure stops the pipeline.
 
@@ -178,3 +186,32 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/predict -ContentType "
 ```
 
 **Image:** `python:3.11-slim`, minimal runtime dependencies (`requirements-api.txt`, versions identical to training), code + model only (`.dockerignore`), non-root user, `HEALTHCHECK` on `/health`, uvicorn as PID 1 for graceful shutdown, one JSON log line per request with request id and latency (also returned as `X-Request-ID` / `X-Process-Time-ms` headers).
+
+## Kubernetes deployment (Stage 7)
+
+Tested on Docker Desktop's built-in Kubernetes (kubeadm, v1.36) and on kind in CI. Manifests are plain YAML combined with Kustomize (built into `kubectl`).
+
+| Resource | Purpose |
+|---|---|
+| Namespace `heart-disease` | isolation; Pod Security Admission **restricted** enforced |
+| ConfigMap `heart-api-config` | `LOG_LEVEL`, `WORKERS` injected as environment variables |
+| Deployment `heart-api` | 2 replicas; rolling update with `maxUnavailable: 0` (zero downtime); startup, readiness and liveness probes on `/health`; CPU/memory requests and limits; non-root, read-only root filesystem, all capabilities dropped; `preStop` delay for graceful shutdown |
+| Service `heart-api` (LoadBalancer) | one stable address load-balancing across pods; `http://localhost:8080` on Docker Desktop |
+| HorizontalPodAutoscaler | 2-5 replicas at 60 % average CPU (needs metrics-server) |
+| PodDisruptionBudget | at least 1 pod stays up during node maintenance |
+
+```powershell
+# deploy the CI-published image from GHCR (package must be public)...
+.\scripts\k8s_deploy.ps1
+# ...or build locally and deploy that image
+.\scripts\k8s_deploy.ps1 -Local
+
+kubectl apply -k k8s/addons/metrics-server/      # optional: metrics for HPA / kubectl top
+kubectl -n heart-disease get pods,svc,hpa
+python scripts/smoke_test_api.py --url http://localhost:8080
+python scripts/load_test.py -n 400 -c 8          # requests spread over the pods
+kubectl -n heart-disease rollout undo deployment/heart-api   # roll back
+kubectl delete -k k8s/                                        # remove everything
+```
+
+Every response carries an `X-Served-By` header with the pod name, so load balancing is visible from the client.
