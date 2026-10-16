@@ -2,7 +2,18 @@
 
 [![CI](https://github.com/prashob-narendran/heart-disease-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/prashob-narendran/heart-disease-mlops/actions/workflows/ci.yml)
 
-Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Disease, Cleveland subset) and is being built out as a reproducible, tested, containerised and monitored ML service.
+Predicts the presence of heart disease from 13 clinical attributes (UCI Heart Disease, Cleveland subset), built as a reproducible, tested, containerised and monitored ML service.
+
+| | |
+|---|---|
+| **Author** | Prashob Narendran |
+| **Student ID** | 2025AE05006 |
+| **Email** | [2025ae05006@wilp.bits-pilani.ac.in](mailto:2025ae05006@wilp.bits-pilani.ac.in) |
+| **Programme** | M.Tech in Artificial Intelligence & Machine Learning, BITS Pilani Work Integrated Learning Programmes (WILP) |
+| **Course** | MLOps (AIMLCZG523): Assignment 1 |
+| **Repository** | <https://github.com/prashob-narendran/heart-disease-mlops> |
+
+This is my individual submission. The design choices, experiments and documentation are my own work.
 
 | Stage | Status |
 |---|---|
@@ -275,3 +286,22 @@ bash scripts/lab_verify.sh summary    # results table
 ```
 
 Each stage writes a timestamped log to `lab_proof/` and ends with a PASSED/FAILED banner.
+
+## Submission deliverables
+
+| Deliverable | Where |
+|---|---|
+| Code, Dockerfile, `requirements.txt` | this repository (`src/`, `api/`, `scripts/`, `Dockerfile`, `requirements*.txt`) |
+| Cleaned dataset + download script | `data/processed/heart_clean.csv`, `scripts/download_data.py` (checksum in `data/raw/manifest.json`) |
+| Notebooks / scripts (EDA, training, inference) | `notebooks/`, `src/eda.py`, `src/train.py`, `src/predict.py` |
+| Unit tests | `tests/` (70 tests, run with `pytest`) |
+| CI/CD workflow | `.github/workflows/ci.yml` ([runs](https://github.com/prashob-narendran/heart-disease-mlops/actions)) |
+| Deployment manifests | `k8s/` (Kustomize base + overlays), `k8s/monitoring/` (Prometheus + Grafana) |
+| Screenshots | `screenshots/` |
+| API access (local testing) | see [Quick start](#quick-start) and [Kubernetes deployment](#kubernetes-deployment-stage-7); image `ghcr.io/prashob-narendran/heart-disease-api:latest` |
+| Final report (Word + PDF) | `reports/` (added with the final submission) |
+| Video walkthrough | link added with the final submission |
+
+---
+
+Prashob Narendran (2025AE05006) · M.Tech AIML, BITS Pilani WILP · MLOps (AIMLCZG523) Assignment 1
