@@ -257,3 +257,21 @@ python scripts/load_test.py --duration 180 -c 8         # watch the dashboard
 python scripts/load_test.py --duration 240 -c 2 --drift --invalid 0.3   # fire model alerts
 kubectl -n heart-disease logs -l app.kubernetes.io/name=heart-api --tail=20 --prefix
 ```
+
+## Clean-room verification (BITS Prayogshala virtual lab)
+
+`scripts/lab_verify.sh` re-runs the project on a fresh Linux machine and proves the production-readiness requirements: clean setup from `requirements.txt`, isolated Docker serving, and a pipeline that stops with clear logs on code, test, data or model-quality errors.
+
+```bash
+git clone https://github.com/prashob-narendran/heart-disease-mlops.git ~/workspace/heart-disease-mlops
+cd ~/workspace/heart-disease-mlops
+bash scripts/lab_verify.sh info       # machine + repo identity
+bash scripts/lab_verify.sh setup      # fresh Python 3.11 env + pip install -r requirements.txt
+bash scripts/lab_verify.sh pipeline   # data checksum -> clean -> EDA -> lint -> tests -> train -> gate -> predict
+bash scripts/lab_verify.sh docker     # build, hardened run, HEALTHCHECK, smoke test
+bash scripts/lab_verify.sh failproof  # lint / test / data / quality-gate failures are caught
+bash scripts/lab_verify.sh k8s        # optional: kind cluster + app + Prometheus/Grafana
+bash scripts/lab_verify.sh summary    # results table
+```
+
+Each stage writes a timestamped log to `lab_proof/` and ends with a PASSED/FAILED banner.
