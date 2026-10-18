@@ -299,8 +299,8 @@ Each stage writes a timestamped log to `lab_proof/` and ends with a PASSED/FAILE
 | Deployment manifests | `k8s/` (Kustomize base + overlays), `k8s/monitoring/` (Prometheus + Grafana) |
 | Screenshots | `screenshots/` |
 | API access (local testing) | see [Quick start](#quick-start) and [Kubernetes deployment](#kubernetes-deployment-stage-7); image `ghcr.io/prashob-narendran/heart-disease-api:latest` |
-| Final report (Word + PDF) | `reports/` (added with the final submission) |
-| Video walkthrough | link added with the final submission |
+| Final report (Word + PDF) | [`reports/MLOps_Assignment1_Report_2025AE05006.pdf`](reports/MLOps_Assignment1_Report_2025AE05006.pdf) and `.docx` |
+| Video walkthrough | [Google Drive folder](https://drive.google.com/drive/folders/16mSTZy-wzmE14V36OrJE33gThXayBDOc?usp=sharing) (7-minute pipeline demo) |
 
 ---
 
